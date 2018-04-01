@@ -41,7 +41,7 @@ namespace CameraModule2
                 Console.WriteLine("Here...");
                 var msg = new Message(pictureBytes);
 #if IOT_EDGE
-                //await iotHubModuleClient.SendEventAsync("cameraOut", msg);
+                await iotHubModuleClient.SendEventAsync("cameraOut", msg);
 #else
                 await iotHubModuleClient.SendEventAsync(msg);
 #endif

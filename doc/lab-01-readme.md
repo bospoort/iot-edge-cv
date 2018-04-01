@@ -8,7 +8,7 @@ send photo to IoT Hub every 3 seconds.
 We usually do not send photo to cloud every certain seconds as it incurs extra
 costs. The purpose of document is meant to provide an instruction on how to
 create a module that able to access to Raspberry Pi hardware. In real-world
-scenario, you should think of doing analysis on the edge and only send
+scenario, you may consider of doing analysis on the edge and only send
 information of interests to the cloud.
 
 Reference
@@ -38,6 +38,9 @@ We assume you have basic knowledge and has setup below services on Azure
 Create IoT Edge Module for RPi
 ==============================
 ### Develope a C# Module ###
+
+#### Complete source code [here](https://github.com/michael-chi/iot-edge-cv/tree/master/src/lab1)
+
 -   On your development environment, execute below command to create a new Azure
     IoT Edge C\# module project
 
@@ -52,38 +55,21 @@ Create IoT Edge Module for RPi
 ```
     -   Your .csproj should looks like below
 ![](media/snip_20180401162542.png)
--   Update Program.cs as below 
+-   Add namespace using to your Program.cs 
 ```csharp 
 #define IOT_EDGE
 
 namespace CameraModule2 
 { 
-using System; 
-using System.IO; 
-using System.Runtime.InteropServices; 
-using System.Runtime.Loader; 
-using System.Security.Cryptography.X509Certificates; 
-using System.Text; 
-using System.Threading; 
-using System.Threading.Tasks; 
-using Microsoft.Azure.Devices.Client; 
-using Microsoft.Azure.Devices.Client.Transport.Mqtt;
+//...Ommitted
 
 using Unosquare.RaspberryIO;
 using Unosquare.RaspberryIO.Camera;
 using Unosquare.RaspberryIO.Computer;
 using Unosquare.RaspberryIO.Gpio;
-
-using Microsoft.Azure.Devices.Shared;
-using Newtonsoft.Json;
-using System.Collections.Generic;
-
-class Program
-{
-    class Test{
-        public string TestText  = "";
-    }
-    static int counter;
+```
+-   Add CaptureImage function to take photo
+```csharp
     static List<Task> tasks = new List<Task>();
     static bool running = true;
     private async static void CaptureImage(DeviceClient iotHubModuleClient)
@@ -95,19 +81,11 @@ class Program
             var pictureBytes = Pi.Camera.CaptureImageJpeg(640,480);
             Console.WriteLine("Here...");
             var msg = new Message(pictureBytes);
-
 #if IOT_EDGE
-
-
-            //await iotHubModuleClient.SendEventAsync("cameraOut", msg);
-
+            await iotHubModuleClient.SendEventAsync("cameraOut", msg);
 #else
-
             await iotHubModuleClient.SendEventAsync(msg);
-
-
 #endif
-
         }
         catch(Exception exp){
             Console.WriteLine($"Exception:{exp.Message}");
@@ -117,124 +95,10 @@ class Program
                 Console.WriteLine($"==> :{exp.StackTrace}");
             }
         }
-
     }
-    static void Main(string[] args)
-    {
-        var osNameAndVersion = System.Runtime.InteropServices.RuntimeInformation.OSDescription;
-        Console.WriteLine(osNameAndVersion);
-        // The Edge runtime gives us the connection string we need -- it is injected as an environment variable
-        string connectionString = Environment.GetEnvironmentVariable("EdgeHubConnectionString");
-        
-        bool bypassCertVerification = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
-
-
-#if IOT_EDGE
-        // Cert verification is not yet fully functional when using Windows OS for the container
-        if (!bypassCertVerification) InstallCert();
-
-#endif
-
-
-
-        Init(connectionString, bypassCertVerification).Wait();
-
-        // Wait until the app unloads or is cancelled
-        var cts = new CancellationTokenSource();
-        AssemblyLoadContext.Default.Unloading += (ctx) => cts.Cancel();
-        Console.CancelKeyPress += (sender, cpe) => cts.Cancel();
-
-
-        WhenCancelled(cts.Token).Wait();
-    }
-
-    /// <summary>
-    /// Handles cleanup operations when app is cancelled or unloads
-    /// </summary>
-    public static Task WhenCancelled(CancellationToken cancellationToken)
-    {
-        var tcs = new TaskCompletionSource<bool>();
-        cancellationToken.Register(s => ((TaskCompletionSource<bool>)s).SetResult(true), tcs);
-        return tcs.Task;
-    }
-
-    /// <summary>
-    /// Add certificate in local cert store for use by client for secure connection to IoT Edge runtime
-    /// </summary>
-    static void InstallCert()
-    {
-        string certPath = Environment.GetEnvironmentVariable("EdgeModuleCACertificateFile");
-        if (string.IsNullOrWhiteSpace(certPath))
-        {
-            // We cannot proceed further without a proper cert file
-            Console.WriteLine($"Missing path to certificate collection file: {certPath}");
-            throw new InvalidOperationException("Missing path to certificate file.");
-        }
-        else if (!File.Exists(certPath))
-        {
-            // We cannot proceed further without a proper cert file
-            Console.WriteLine($"Missing path to certificate collection file: {certPath}");
-            throw new InvalidOperationException("Missing certificate file.");
-        }
-        X509Store store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
-        store.Open(OpenFlags.ReadWrite);
-        store.Add(new X509Certificate2(X509Certificate2.CreateFromCertFile(certPath)));
-        Console.WriteLine("Added Cert: " + certPath);
-        store.Close();
-    }
-
-    /// <summary>
-    /// Initializes the DeviceClient and sets up the callback to receive
-    /// messages containing temperature information
-    /// </summary>
-    static async Task Init(string connectionString, bool bypassCertVerification = false)
-    {
-        Console.WriteLine("Connection String {0}", connectionString);
-
-        MqttTransportSettings mqttSetting = new MqttTransportSettings(TransportType.Mqtt_Tcp_Only);
-        // During dev you might want to bypass the cert verification. It is highly recommended to verify certs systematically in production
-        if (bypassCertVerification)
-        {
-            mqttSetting.RemoteCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) => true;
-        }
-        ITransportSettings[] settings = { mqttSetting };
-        DeviceClient iotHubModuleClient = DeviceClient.CreateFromConnectionString(connectionString, settings);
-        await iotHubModuleClient.OpenAsync();
-        Console.WriteLine("IoT Hub Module Client Opened...");
-        Twin iotModuleTwin = await iotHubModuleClient.GetTwinAsync();
-
-        await UpdateFromTwin(iotModuleTwin.Properties.Desired, iotHubModuleClient);
-        await iotHubModuleClient.SetDesiredPropertyUpdateCallbackAsync(
-            OnDesiredPropertiesUpdate,
-            iotHubModuleClient);
-    }
-
-    private static async Task OnDesiredPropertiesUpdate(TwinCollection desiredProperties, object userContext)
-    {
-        DeviceClient ioTHubModuleClient = userContext as DeviceClient;
-        running = false;
-        try
-        {
-#if IOT_EDGE
-            // stop all activities while updating configuration
-            await ioTHubModuleClient.SetInputMessageHandlerAsync(
-                "input",
-                DummyCallBack,
-                null);
-#endif
-            await UpdateFromTwin(desiredProperties, ioTHubModuleClient);
-        }
-        catch
-        {
-        }
-    }
-
-    private static async Task<MessageResponse> DummyCallBack(Message message, object userContext)
-    {
-        await Task.Delay(TimeSpan.FromMilliseconds(0));
-        return MessageResponse.Abandoned;
-    }
-
+```
+-   In UpdateFromTwin(), whenever receives an desired property update event, invoke Start(), in which we will setup CaptureImage() timer.
+```csharp
     private static async Task UpdateFromTwin(TwinCollection desired, DeviceClient iotHubModuleClient)
     {
         if (desired != null)
@@ -253,7 +117,7 @@ class Program
 #else
         await iotHubModuleClient.GetTwinAsync();
 #endif
-        tasks.Add(Start(iotHubModuleClient));
+        tasks.Add(Start(iotHubModuleClient));//Add a task reference
     }
     static async Task Start(DeviceClient iotHubModuleClient)
     {
@@ -263,45 +127,6 @@ class Program
             await Task.Delay(1000 * 3);
         }
     }
-    /// <summary>
-    /// This method is called whenever the module is sent a message from the EdgeHub. 
-    /// It just pipe the messages without any change.
-    /// It prints all the incoming messages.
-    /// </summary>
-    static async Task<MessageResponse> PipeMessage(Message message, object userContext)
-    {
-        //DO NOTHING for now
-        var deviceClient = userContext as DeviceClient;
-        await deviceClient.CompleteAsync(message);
-        return MessageResponse.Completed;
-#if false
-        int counterValue = Interlocked.Increment(ref counter);
-        var deviceClient = userContext as DeviceClient;
-        if (deviceClient == null)
-        {
-            throw new InvalidOperationException("UserContext doesn't contain " + "expected values");
-        }
-
-        byte[] messageBytes = message.GetBytes();
-        string messageString = Encoding.UTF8.GetString(messageBytes);
-        Console.WriteLine($"Received message: {counterValue}, Body: [{messageString}]");
-
-        if (!string.IsNullOrEmpty(messageString))
-        {
-            var pipeMessage = new Message(messageBytes);
-            foreach (var prop in message.Properties)
-            {
-                pipeMessage.Properties.Add(prop.Key, prop.Value);
-            }
-            await deviceClient.SendEventAsync("cameraOutput", pipeMessage);
-            Console.WriteLine("Received message sent");
-        }
-
-        return MessageResponse.Completed;
-#endif
-    }
-}
-}
 ```
 
 -   Create a new file named “Dockerfile.camera”
@@ -346,8 +171,8 @@ ENTRYPOINT ["dotnet", "CameraModule2.dll"]
 ```
 
 - Explain of the docker file
-    1. We start from basic Jessie image and installed required package including raspistill which will be used in our C\# module. 
-    2. We then switch to official build environment for Raspberry Pi and build our module.
+    1. We start from basic Jessie image and installed required package including raspistill which will be used in our C\# module.
+    2. We then use to official build environment for Raspberry Pi and build our module. AS of today, Raspberry Pi can only be the deployment target (not development target)
 - Now edit module.json, add below line to your module.json file
 ```json
 "camera":"/Dockerfile.camera"
